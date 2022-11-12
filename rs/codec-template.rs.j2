@@ -1,0 +1,253 @@
+{% macro encode_var_sized(param) -%}
+    {% if is_var_sized_list(param.type) or is_var_sized_list_contains_nullable(param.type) -%}
+        ListMultiFrameCodec::encode{% if is_var_sized_list_contains_nullable(param.type)%}_contains_nullable{% endif %}{% if param.nullable  %}_nullable{% endif %}(&mut client_message, {{ to_lower_snake_case(escape_keyword(param.name)) }}, {{ item_type(lang_name, param.type) }}Codec::encode).await
+    {%- elif is_var_sized_entry_list(param.type) -%}
+        EntryListCodec::encode{% if param.nullable  %}_nullable{% endif %}(&mut client_message, {{ to_lower_snake_case(escape_keyword(param.name)) }}, {{ key_type(lang_name, param.type) }}Codec::encode, {{ value_type(lang_name, param.type) }}Codec::encode).await
+    {%- elif is_var_sized_map(param.type) -%}
+        MapCodec::encode{% if param.nullable  %}_nullable{% endif %}(&mut client_message, {{ to_lower_snake_case(escape_keyword(param.name)) }}, {{ key_type(lang_name, param.type) }}Codec::encode, {{ value_type(lang_name, param.type) }}Codec::encode).await
+    {%- else -%}
+        {%- if param.nullable  -%}
+            CodecUtil::encode_nullable(&mut client_message, {{ to_lower_snake_case(escape_keyword(param.name)) }}, {{ lang_name(param.type) }}Codec::encode).await
+        {%- else -%}
+            {{ lang_name(param.type) }}Codec::encode(&mut client_message, {{ to_lower_snake_case(escape_keyword(param.name)) }}).await
+        {%- endif %}
+    {% endif %}
+{%- endmacro %}
+{% macro decode_var_sized(param) -%}
+    {%- if is_var_sized_list(param.type) or is_var_sized_list_contains_nullable(param.type) -%}
+        ListMultiFrameCodec::decode{% if is_var_sized_list_contains_nullable(param.type) %}_contains_nullable{% endif %}{% if param.nullable  %}_nullable{% endif %}(client_message, {{ item_type(lang_name, param.type) }}Codec::decode).await
+    {%- elif is_var_sized_entry_list(param.type) -%}
+        EntryListCodec::decode{% if param.nullable  %}_nullable{% endif %}(client_message, {{ key_type(lang_name, param.type) }}Codec::decode, {{ value_type(lang_name, param.type) }}Codec::decode).await
+    {%- elif is_var_sized_map(param.type) -%}
+        MapCodec::decode{% if param.nullable  %}_nullable{% endif %}(client_message, {{ key_type(lang_name, param.type) }}Codec::decode, {{ value_type(lang_name, param.type) }}Codec::decode).await
+    {%- else -%}
+        {%- if param.nullable  -%}
+            CodecUtil::decode_nullable(client_message, {{ lang_name(param.type) }}Codec::decode).await
+        {%- else -%}
+            {{ lang_name(param.type) }}Codec::decode(client_message).await
+        {%- endif -%}
+    {%- endif -%}
+{%- endmacro %}
+{% macro get_import_statements() -%}
+    {% set imported_paths = [] %}
+    {%- for params in varargs -%}
+        {% for param in params %}
+            {% set path_holders = get_import_path_holders(param.type) %}
+            {% if path_holders is not none %}
+                {%- for path_holder in path_holders -%}
+                    {% if not path_holder.name in imported_paths %}
+                        {%- do imported_paths.append(path_holder.name) -%}
+                        {{ path_holder.get_import_statement(False) }}
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
+            {% if not (is_var_sized_list(param.type) or is_var_sized_list_contains_nullable(param.type) or is_var_sized_entry_list(param.type) or is_var_sized_map(param.type)) and param.nullable and param.type != 'UUID' and not 'CodecUtil' in imported_paths %}
+                {%- do imported_paths.append('CodecUtil') -%}
+                {{ get_import_path_holders('CodecUtil').get_import_statement(False) }}
+            {% endif %}
+        {%- endfor -%}
+    {%- endfor -%}
+{%- endmacro %}
+{% set request_fix_sized_params = fixed_params(method.request.params) %}
+{% set request_var_sized_params = var_size_params(method.request.params) %}
+{% set response_fix_sized_params = fixed_params(method.response.params) %}
+{% set response_var_sized_params = var_size_params(method.response.params) %}
+{% set response_new_params = new_params(method.since, method.response.params) %}
+{% set event_fix_sized_params = [] %}
+{% set event_var_sized_params = [] %}
+{% if method.events|length != 0 %}
+    {% for event in method.events %}
+        {% do event_fix_sized_params.extend(fixed_params(event.params)) %}
+        {% do event_var_sized_params.extend(var_size_params(event.params)) %}
+    {% endfor %}
+{% endif %}
+{{ get_import_statements(request_fix_sized_params, request_var_sized_params, response_fix_sized_params, response_var_sized_params, event_fix_sized_params, event_var_sized_params) }}
+{% if noResponseValue %}
+{% elif singleResponseValue %}
+{% else %}
+use std::mem::MaybeUninit;
+{% endif %}
+use crate::protocol::client_message::{ClientMessage, Frame};
+use crate::util::bits_util::BitsUtil;
+use core::pin::Pin;
+use std::future::Future;
+{% if request_fix_sized_params|length != 0 or response_fix_sized_params|length != 0 or event_fix_sized_params|length != 0 %}
+use crate::codec_builtin::fix_sized_types_codec::FixSizedTypesCodec;
+{% endif %}
+
+{% set noResponseValue = method.response.params|length == 0 %}
+{% set singleResponseValue = method.response.params|length == 1 and response_new_params|length == 0 %}
+{% if not (noResponseValue or singleResponseValue) %}
+
+/** @internal */
+#[derive(Default, Clone)]
+pub struct {{ service_name|capital }}{{ method.name|capital }}ResponseParams {
+{% for param in method.response.params %}
+    pub {{ to_lower_snake_case(escape_keyword(param.name)) }}: {% if param.nullable %}Option<{% endif %}{{ lang_types_encode(param.type) }}{% if param.nullable %}>{% endif %},
+{% endfor %}
+{% for new_param in response_new_params %}
+    pub is_{{ to_lower_snake_case(new_param.name|capital) }}_exists: boolean,
+{% endfor %}
+}
+{% endif %}
+
+
+pub struct {{ service_name|capital }}{{ method.name|capital }}Codec;
+
+impl {{ service_name|capital }}{{ method.name|capital }}Codec {
+
+    // hex: {{ '0x%06X'|format(method.request.id) }}
+    const REQUEST_MESSAGE_TYPE: i32 = {{ method.request.id }};
+    // hex: {{ '0x%06X'|format(method.response.id) }}
+    // RESPONSE_MESSAGE_TYPE = {{ method.response.id }}
+    {% for event in method.events%}
+    // hex: {{ '0x%06X'|format(event.id) }}
+    const EVENT_{{ to_upper_snake_case(event.name) }}_MESSAGE_TYPE: i32 = {{ event.id }};
+    {% endfor %}
+
+    {#FIXED SIZED PARAMETER OFFSET CONSTANTS#}
+    {% for param in request_fix_sized_params %}
+    const REQUEST_{{ to_upper_snake_case(param.name) }}_OFFSET: usize = {% if loop.first %}ClientMessage::PARTITION_ID_OFFSET as usize + BitsUtil::INT_SIZE_IN_BYTES as usize{% else %}Self::REQUEST_{{ to_upper_snake_case(loop.previtem.name)}}_OFFSET + BitsUtil::{{ loop.previtem.type.upper() }}_SIZE_IN_BYTES as usize{% endif %};
+        {% if loop.last %}
+    const REQUEST_INITIAL_FRAME_SIZE: usize = Self::REQUEST_{{ to_upper_snake_case(param.name) }}_OFFSET + BitsUtil::{{ param.type.upper() }}_SIZE_IN_BYTES as usize;
+        {% endif %}
+    {% else %}
+    const REQUEST_INITIAL_FRAME_SIZE: usize = ClientMessage::PARTITION_ID_OFFSET as usize + BitsUtil::INT_SIZE_IN_BYTES as usize;
+    {% endfor %}
+    {% for param in response_fix_sized_params %}
+    const RESPONSE_{{ to_upper_snake_case(param.name) }}_OFFSET: usize = {% if loop.first %}ClientMessage::RESPONSE_BACKUP_ACKS_OFFSET as usize + BitsUtil::BYTE_SIZE_IN_BYTES{% else %}Self::RESPONSE_{{ to_upper_snake_case(loop.previtem.name)}}_OFFSET as usize + BitsUtil::{{loop.previtem.type.upper()}}_SIZE_IN_BYTES{% endif %} as usize;
+    {% endfor %}
+    {% for event in method.events %}
+        {% for param in fixed_params(event.params) %}
+    const EVENT_{{ to_upper_snake_case(event.name)}}_{{to_upper_snake_case(param.name)}}_OFFSET: usize = {% if loop.first %}ClientMessage::PARTITION_ID_OFFSET as usize + BitsUtil::INT_SIZE_IN_BYTES{% else %}EVENT_{{ to_upper_snake_case(event.name)}}_{{ to_upper_snake_case(loop.previtem.name)}}_OFFSET as usize+ BitsUtil::{{loop.previtem.type.upper()}}_SIZE_IN_BYTES{% endif %} as usize;
+        {% endfor %}
+    {% endfor %}
+
+    pub fn encode_request<'a>({% for param in method.request.params %}{{ to_lower_snake_case(escape_keyword(param.name)) }}: {% if param.nullable %}&'a Option<{% endif %}&'a {{ lang_types_encode(param.type) }}{% if param.nullable %}>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}) -> Pin<Box<dyn Future<Output=ClientMessage> + Send + Sync + 'a>> {
+        Box::pin(async move {
+            let mut client_message = ClientMessage::create_for_encode().await;
+            client_message.retryable = {{ method.request.retryable|lower }};
+
+            let initial_frame = Frame::create_initial_frame(Self::REQUEST_INITIAL_FRAME_SIZE, None);
+        {% for param in request_fix_sized_params %}
+            FixSizedTypesCodec::encode_{{ to_lower_snake_case(param.type|capital) }}{% if param.nullable %}_nullable{% endif %}(&mut *initial_frame.content.lock().await, Self::REQUEST_{{to_upper_snake_case(param.name)}}_OFFSET, {{ to_lower_snake_case(escape_keyword(param.name)) }}).await;
+        {% endfor %}
+            client_message.add_frame(initial_frame).await;
+            client_message.set_message_type(Self::REQUEST_MESSAGE_TYPE).await;
+            client_message.set_partition_id(-1).await;
+
+        {% for param in request_var_sized_params %}
+            {{ encode_var_sized(param) }};
+        {% endfor %}
+
+            client_message
+        })
+    }
+
+{% if noResponseValue %}
+{% elif singleResponseValue %}
+    {% set param = method.response.params|last %}
+
+    pub fn decode_response<'a>(client_message: &'a mut ClientMessage) -> Pin<Box<dyn Future<Output={% if param.nullable %}Option<{% endif %}{{ lang_types_decode(param.type) }}{% if param.nullable %}>{% endif %}> + Send + Sync + 'a>> {
+        Box::pin(async move {
+        {% if response_fix_sized_params|length != 0 %}
+            let initial_frame = client_message.next_frame().await.unwrap();
+        {% else %}
+            // empty initial frame
+            client_message.next_frame().await.unwrap();
+        {% endif %}
+
+        {% for param in response_fix_sized_params %}
+            FixSizedTypesCodec::decode_{{ to_lower_snake_case(param.type|capital) }}{% if param.nullable %}_nullable{% endif %}(&*initial_frame.content.lock().await, Self::RESPONSE_{{to_upper_snake_case(param.name)}}_OFFSET).await
+        {% endfor %}
+        {% for param in response_var_sized_params %}
+            {{ decode_var_sized(param) }}
+        {% endfor %}
+        })
+    }
+
+{% else %}
+    pub fn decode_response<'a>(client_message: &'a mut ClientMessage) -> Pin<Box<dyn Future<Output={{ service_name|capital }}{{ method.name|capital }}ResponseParams> + Send + Sync + 'a>> {
+        Box::pin(async move {
+    {% if response_fix_sized_params|length != 0 %}
+            let initial_frame = client_message.next_frame().await.unwrap();
+    {% else %}
+            // empty initial frame
+            client_message.next_frame().await.unwrap();
+    {% endif %}
+            #[allow(invalid_value)]
+            let mut response = unsafe { MaybeUninit::<ClientAuthenticationResponseParams>::zeroed().assume_init() };
+
+    {% for param in response_fix_sized_params %}
+        {% if param in response_new_params %}
+            if initial_frame.content.lock().await.length >= Self::RESPONSE_{{ to_upper_snake_case(param.name) }}_OFFSET + BitsUtil::{{ param.type.upper() }}_SIZE_IN_BYTES {
+                response.{{ to_lower_snake_case(escape_keyword(param.name)) }} = FixSizedTypesCodec::decode_{{ to_lower_snake_case(param.type|capital) }}(&*initial_frame.content.lock().await, Self::RESPONSE_{{to_upper_snake_case(param.name)}}_OFFSET).await;
+                response.is_{{ to_lower_snake_case(param.name|capital) }}_exists = true;
+            } else {
+                response.is_{{ to_lower_snake_case(param.name|capital) }}_exists = false;
+            }
+        {% else %}
+            response.{{ to_lower_snake_case(escape_keyword(param.name)) }} = FixSizedTypesCodec::decode_{{ to_lower_snake_case(param.type|capital) }}{% if param.nullable %}_nullable{% endif %}(&*initial_frame.content.lock().await, Self::RESPONSE_{{to_upper_snake_case(param.name)}}_OFFSET).await;
+        {% endif %}
+    {% endfor %}
+    {% for param in response_var_sized_params %}
+        {% if param in response_new_params %}
+            if client_message.hasNextFrame() {
+                response.{{ to_lower_snake_case(escape_keyword(param.name)) }} = {{ decode_var_sized(param) }};
+                response.is_{{ to_lower_snake_case(param.name|capital) }}_exists = true;
+            } else {
+                response.is_{{ to_lower_snake_case(param.name|capital) }}_exists = false;
+            }
+        {% else %}
+            response.{{ to_lower_snake_case(escape_keyword(param.name)) }} = {{ decode_var_sized(param) }};
+        {% endif %}
+    {% endfor %}
+            response
+        })
+    }
+{% endif %}
+
+{# EVENTS#}
+{% if method.events|length != 0 %}
+    pub async fn handle(client_message: &mut ClientMessage{% for event in method.events %}, handle_{{ to_lower_snake_case(event.name|capital) }}_event: Option<impl Fn({% for param in event.params %}{{ lang_types_encode(param.type) }}{% if not loop.last %}, {% endif %}{% endfor %})>{% endfor %}) {
+        let message_type = client_message.get_message_type().await;
+    {% for event in method.events %}
+        if message_type == Self::EVENT_{{ to_upper_snake_case(event.name) }}_MESSAGE_TYPE && handle_{{ to_lower_snake_case(event.name|capital) }}_event.is_some() {
+        {% set new_event_params = new_params(event.since, event.params) %}
+        {% if fixed_params(event.params)|length != 0 %}
+            let initial_frame = client_message.next_frame().await.unwrap();
+        {% else %}
+            // empty initial frame
+            client_message.next_frame().await.unwrap();
+        {% endif %}
+        {% for param in fixed_params(event.params) %}
+            {% if param in new_event_params %}
+            let is_{{ to_lower_snake_case(param.name|capital) }}_exists = false;
+            let {{ to_lower_snake_case(escape_keyword(param.name)) }} = {% if param.type == 'boolean' %}false{% elif param.type == 'UUID' %}null{% else %}0{% endif %};
+            if (initial_frame.content.lock().await.length >= EVENT_{{ to_upper_snake_case(event.name)}}_{{ to_upper_snake_case(param.name) }}_OFFSET + BitsUtil.{{ param.type.upper() }}_SIZE_IN_BYTES) {
+                {{ to_lower_snake_case(escape_keyword(param.name)) }} = FixSizedTypesCodec::decode_{{ to_lower_snake_case(param.type|capital) }}(&mut *initial_frame.content.lock().await, Self::EVENT_{{ to_upper_snake_case(event.name)}}_{{ to_upper_snake_case(param.name) }}_OFFSET).await;
+                is_{{ to_lower_snake_case(param.name|capital) }}_exists = true;
+            }
+            {% else %}
+            let {{ to_lower_snake_case(escape_keyword(param.name)) }} = FixSizedTypesCodec::decode_{{ to_lower_snake_case(param.type|capital) }}(&mut *initial_frame.content.lock().await, Self::EVENT_{{ to_upper_snake_case(event.name)}}_{{ to_upper_snake_case(param.name) }}_OFFSET).await;
+            {% endif %}
+        {% endfor %}
+        {% for param in var_size_params(event.params) %}
+            {% if param in new_event_params %}
+            let is_{{ to_lower_snake_case(param.name|capital) }}_exists = false;
+            let {{ to_lower_snake_case(escape_keyword(param.name)) }} = null;
+            if (iterator.hasNextFrame()) {
+                {{ to_lower_snake_case(escape_keyword(param.name)) }} = {{ decode_var_sized(param) }};
+                is_{{ to_lower_snake_case(param.name|capital) }}_exists = true;
+            }
+            {% else %}
+            let {{ to_lower_snake_case(escape_keyword(param.name)) }} = {{ decode_var_sized(param) }};
+            {% endif %}
+        {% endfor %}
+            handle_{{ to_lower_snake_case(event.name|capital) }}_event.unwrap()({% for param in event.params %}{% if param in new_event_params %}is_{{ to_lower_snake_case(param.name|capital) }}_exists, {% endif %}{{to_lower_snake_case(param.name)}}{% if not loop.last %}, {% endif %}{% endfor %});
+            return;
+        }
+    {% endfor %}
+    }
+{% endif %}
+}

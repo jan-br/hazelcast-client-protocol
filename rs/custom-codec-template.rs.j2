@@ -1,0 +1,169 @@
+{% macro decode_var_sized(param) -%}
+    {%- if is_var_sized_list(param.type) or is_var_sized_list_contains_nullable(param.type) -%}
+        ListMultiFrameCodec::decode{% if is_var_sized_list_contains_nullable(param.type) %}_contains_nullable{% endif %}{% if param.nullable  %}_nullable{% endif %}(client_message, {{ item_type(lang_name, param.type) }}Codec::decode).await
+    {%- elif is_var_sized_entry_list(param.type) -%}
+        EntryListCodec::decode{% if param.nullable  %}_nullable{% endif %}(client_message, {{ key_type(lang_name, param.type) }}Codec::decode, {{ value_type(lang_name, param.type) }}Codec::decode).await
+    {%- elif is_var_sized_map(param.type) -%}
+        MapCodec::decode{% if param.nullable  %}_nullable{% endif %}(client_message, {{ key_type(lang_name, param.type) }}Codec::decode, {{ value_type(lang_name, param.type) }}Codec::decode).await
+    {%- else -%}
+        {%- if param.nullable  -%}
+            CodecUtil::decode_nullable(client_message, {{ lang_name(param.type) }}Codec::decode).await
+        {%- else -%}
+            {{ lang_name(param.type) }}Codec::decode(client_message).await
+        {%- endif -%}
+    {%- endif -%}
+{%- endmacro %}
+{% macro encode_var_sized(param) -%}
+    {% if is_var_sized_list(param.type) or is_var_sized_list_contains_nullable(param.type) -%}
+        ListMultiFrameCodec::encode{% if is_var_sized_list_contains_nullable(param.type)%}_contains_nullable{% endif %}{% if param.nullable  %}_nullable{% endif %}(client_message, &{{ param_name(codec.name)}}.{{ get_field(param) }}, {{ item_type(lang_name, param.type) }}Codec::encode).await
+    {%- elif is_var_sized_entry_list(param.type) -%}
+        EntryListCodec::encode{% if param.nullable  %}_nullable{% endif %}(client_message, &{{ param_name(codec.name)}}.{{ get_field(param) }}, {{ key_type(lang_name, param.type) }}Codec::encode, {{ value_type(lang_name, param.type) }}Codec::encode).await
+    {%- elif is_var_sized_map(param.type) -%}
+        MapCodec::encode{% if param.nullable  %}_nullable{% endif %}(client_message, &{{ param_name(codec.name)}}.{{ get_field(param) }}, {{ key_type(lang_name, param.type) }}Codec::encode, {{ value_type(lang_name, param.type) }}Codec::encode).await
+    {%- else -%}
+        {%- if param.nullable  -%}
+            CodecUtil::encode_nullable(client_message, &{{ param_name(codec.name)}}.{{ get_field(param) }}, {{ lang_name(param.type) }}Codec::encode).await
+        {%- else -%}
+            {{ lang_name(param.type) }}Codec::encode(client_message, &{{ param_name(codec.name)}}.{{ get_field(param) }}).await
+        {%- endif %}
+    {% endif %}
+{%- endmacro %}
+{% macro get_field(param) %}
+    {%- if param.getterMethod -%}
+        {{ escape_keyword(param.getterMethod) }}
+    {%- else -%}
+        {{ to_lower_snake_case(escape_keyword(param.name)) }}
+    {%- endif %}
+{%- endmacro %}
+{% macro get_import_statements() -%}
+    {% set imported_paths = [] %}
+    {%- for params in varargs -%}
+        {% for param in params %}
+            {% set path_holders = get_import_path_holders(param.type) %}
+            {%- for path_holder in path_holders -%}
+                {% if not path_holder.name in imported_paths and path_holder.name.endswith('Codec') %}
+                    {%- do imported_paths.append(path_holder.name) -%}
+                    {{ path_holder.get_import_statement(True) }}
+                {% endif %}
+            {% endfor %}
+            {% set path_holders = get_import_path_holders(codec.name) %}
+            {%- for path_holder in path_holders -%}
+                {% if not path_holder.name in imported_paths and path_holder.name != codec.name + 'Codec' %}
+                    {%- do imported_paths.append(path_holder.name) -%}
+                    {{ path_holder.get_import_statement(True) }}
+                {% endif %}
+            {% endfor %}
+        {%- endfor -%}
+    {%- endfor -%}
+{%- endmacro %}
+{% set fix_sized_params = fixed_params(codec.params) %}
+{% set var_sized_params = var_size_params(codec.params) %}
+{% set new_codec_params = new_params(codec.since, codec.params) %}
+{% set fix_sized_new_params = new_params(codec.since, fix_sized_params) %}
+{% set should_add_begin_frame = (fix_sized_params|length > fix_sized_new_params|length) or fix_sized_params|length == 0 %}
+{{ get_import_statements(fix_sized_params, var_sized_params) }}
+{% if var_sized_params|length != 0 %}
+use crate::codec_builtin::list_multi_frame_codec::ListMultiFrameCodec;
+{% endif %}
+use crate::protocol::client_message::{ClientMessage, Frame};
+use crate::codec_builtin::codec_util::CodecUtil;
+use core::pin::Pin;
+use std::future::Future;
+{% if fix_sized_params|length != 0 %}
+use crate::codec_builtin::fix_sized_types_codec::FixSizedTypesCodec;
+use crate::util::bits_util::BitsUtil;
+{% endif %}
+
+pub struct {{ codec.name|capital }}Codec;
+
+impl {{ codec.name|capital }}Codec {
+{% for param in fix_sized_params %}
+    const {{ to_upper_snake_case(param.name) }}_OFFSET: usize = {% if loop.first %}0{% else %}Self::{{ to_upper_snake_case(loop.previtem.name)}}_OFFSET + BitsUtil::{{ loop.previtem.type.upper() }}_SIZE_IN_BYTES as usize{% endif %};
+    {% if loop.last %}
+    const INITIAL_FRAME_SIZE: usize = Self::{{to_upper_snake_case(param.name)}}_OFFSET + BitsUtil::{{ param.type.upper() }}_SIZE_IN_BYTES as usize;
+
+    {% endif %}
+{% endfor %}
+
+    pub fn encode<'a>(client_message: &'a mut ClientMessage, {{ param_name(codec.name) }}: &'a {{ lang_types_encode(codec.name) }}) -> Pin<Box<dyn Future<Output=()> + Send + Sync + 'a>> {
+        Box::pin(async move {
+        {% if should_add_begin_frame %}
+            client_message.add_frame(Frame::new_begin_frame()).await;
+        {% endif %}
+    {% for param in fix_sized_params %}
+        {% if loop.first %}
+
+            let mut initial_frame = Frame::create_initial_frame(Self::INITIAL_FRAME_SIZE, Some(ClientMessage::DEFAULT_FLAGS));
+        {% endif %}
+            FixSizedTypesCodec::encode_{{ to_lower_snake_case(param.type|capital) }}(&mut *initial_frame.content.lock().await, Self::{{to_upper_snake_case(param.name)}}_OFFSET, &{{ param_name(codec.name)}}.{{ get_field(param) }}).await;
+        {% if loop.last %}
+            {% if not should_add_begin_frame %}
+            *initial_frame.flags.lock().await |= ClientMessage::BEGIN_DATA_STRUCTURE_FLAG;
+            {% endif %}
+            client_message.add_frame(initial_frame).await;
+        {% endif %}
+    {% endfor %}
+    {% for param in var_sized_params %}
+        {% if loop.first %}
+
+        {% endif %}
+        {% if lang_types_encode(param.type) == '!skip' %}
+            {% continue %}
+        {% endif %}
+            {{ encode_var_sized(param) }};
+    {% endfor %}
+
+            client_message.add_frame(Frame::new_end_frame()).await;
+        })
+    }
+
+    pub fn decode<'a>(client_message: &'a mut ClientMessage) -> Pin<Box<dyn Future<Output={{ lang_types_decode(codec.name) }}> + Send + Sync + 'a>> {
+        Box::pin(async move {
+        {% if should_add_begin_frame %}
+            client_message.next_frame().await.unwrap();
+        {% endif %}
+    {% for param in fix_sized_params %}
+        {% if loop.first %}
+            let mut initial_frame = client_message.next_frame().await.unwrap();
+        {% endif %}
+        {% if param in fix_sized_new_params %}
+            let is_{{ to_lower_snake_case(param.name|capital) }}_exists = false;
+            let {{ to_lower_snake_case(escape_keyword(param.name)) }} = {% if param.type == 'boolean' %}false{% elif param.type == 'UUID' %}null{% else %}0{% endif %};
+            if (initial_frame.content.length >= {{ to_upper_snake_case(param.name) }}_OFFSET + BitsUtil.{{ param.type.upper() }}_SIZE_IN_BYTES) {
+                {{ to_lower_snake_case(escape_keyword(param.name)) }} = FixSizedTypesCodec::decode_{{ to_lower_snake_case(param.type|capital) }}(&mut *initial_frame.content.lock().await, Self::{{ to_upper_snake_case(param.name) }}_OFFSET).await;
+                is_{{ to_lower_snake_case(param.name|capital) }}_exists = true;
+            }
+        {% else %}
+            let {{ to_lower_snake_case(escape_keyword(param.name)) }} = FixSizedTypesCodec::decode_{{ to_lower_snake_case(param.type|capital) }}(&mut *initial_frame.content.lock().await, Self::{{ to_upper_snake_case(param.name) }}_OFFSET).await;
+        {% endif %}
+    {% endfor %}
+            {% for param in var_sized_params %}
+                {% if loop.first %}
+
+                {% endif %}
+                {% if lang_types_decode(param.type) == '!skip' %}
+                    {% continue %}
+                {% endif %}
+                {% if param in new_codec_params %}
+            let mut is_{{ to_lower_snake_case(param.name|capital) }}_exists = false;
+            let mut {{ to_lower_snake_case(escape_keyword(param.name)) }} = None;
+            if !client_message.peek_next_frame().unwrap().is_end_frame().await {
+                {{ to_lower_snake_case(escape_keyword(param.name)) }} = Some({{ decode_var_sized(param) }});
+                is_{{ to_lower_snake_case(param.name|capital) }}_exists = true;
+            }
+                {% else %}
+            let {{ to_lower_snake_case(escape_keyword(param.name)) }} = {{ decode_var_sized(param) }};
+                {% endif %}
+            {% endfor %}
+            CodecUtil::fast_forward_to_end_frame(client_message).await;
+
+            {% set ctor_params = [] %}
+            {% for param in codec.params %}
+                {% if lang_types_decode(param.type) != '!skip' %}
+                    {% do ctor_params.append(param) %}
+                {% endif %}
+            {% endfor %}
+            {{ lang_types_decode(codec.name) }}::new({% for param in ctor_params %}{% if param in new_codec_params %}is_{{ to_lower_snake_case(param.name|capital) }}_exists, {% endif %}{{ to_lower_snake_case(escape_keyword(param.name)) }}{% if not loop.last %}, {% endif %}{% endfor %})
+        })
+    }
+}

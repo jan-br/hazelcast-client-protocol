@@ -41,6 +41,7 @@ from py import (
     py_types_encode_decode,
     py_custom_type_name,
 )
+from rs import rs_types_encode, rs_types_decode, rs_escape_keyword, rs_ignore_service_list, rs_get_import_path_holders
 from ts import (
     ts_escape_keyword,
     ts_get_import_path_holders,
@@ -89,6 +90,11 @@ def to_upper_snake_case(camel_case_str):
     # s1 = re.sub('(.)([A-Z]+[a-z]+)', r'\1_\2', camel_case_str)
     # return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).upper()
 
+
+def to_lower_snake_case(camel_case_str):
+    return re.sub("((?<=[a-z0-9])[A-Z]|(?!^)[A-Z](?=[a-z]))", r"_\1", camel_case_str).lower()
+    # s1 = re.sub('(.)([A-Z]+[a-z]+)', r'\1_\2', camel_case_str)
+    # return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
 def version_to_number(major, minor, patch=0):
     return (
@@ -538,6 +544,7 @@ def get_protocol_versions(protocol_defs, custom_codec_defs):
 
 
 class SupportedLanguages(Enum):
+    RS = "rs"
     JAVA = "java"
     CPP = "cpp"
     CS = "cs"
@@ -553,6 +560,7 @@ codec_output_directories = {
     SupportedLanguages.CS: "src/Hazelcast.Net/Protocol/Codecs/",
     SupportedLanguages.PY: "hazelcast/protocol/codec/",
     SupportedLanguages.TS: "src/codec/",
+    SupportedLanguages.RS: "src/codec/",
     # SupportedLanguages.GO: 'internal/proto/'
     SupportedLanguages.MD: "documentation",
 }
@@ -562,6 +570,7 @@ custom_codec_output_directories = {
     SupportedLanguages.CPP: "hazelcast/generated-sources/src/hazelcast/client/protocol/codec/",
     SupportedLanguages.CS: "src/Hazelcast.Net/Protocol/CustomCodecs/",
     SupportedLanguages.PY: "hazelcast/protocol/codec/custom/",
+    SupportedLanguages.RS: "src/codec/custom/",
     SupportedLanguages.TS: "src/codec/custom",
     # SupportedLanguages.GO: 'internal/proto/'
 }
@@ -587,6 +596,7 @@ file_name_generators = {
     SupportedLanguages.CS: _capitalized_name_generator("cs"),
     SupportedLanguages.PY: _snake_cased_name_generator("py"),
     SupportedLanguages.TS: _capitalized_name_generator("ts"),
+    SupportedLanguages.RS: _snake_cased_name_generator("rs"),
     # SupportedLanguages.GO: 'go'
     SupportedLanguages.MD: "md",
 }
@@ -597,6 +607,7 @@ language_specific_funcs = {
         SupportedLanguages.CS: cs_types_encode,
         SupportedLanguages.CPP: cpp_types_encode,
         SupportedLanguages.TS: ts_types_encode,
+        SupportedLanguages.RS: rs_types_encode,
         SupportedLanguages.PY: py_types_encode_decode,
         SupportedLanguages.MD: lambda x: x,
     },
@@ -605,6 +616,7 @@ language_specific_funcs = {
         SupportedLanguages.CS: cs_types_decode,
         SupportedLanguages.CPP: cpp_types_decode,
         SupportedLanguages.TS: ts_types_decode,
+        SupportedLanguages.RS: rs_types_decode,
         SupportedLanguages.PY: py_types_encode_decode,
         SupportedLanguages.MD: lambda x: x,
     },
@@ -613,6 +625,7 @@ language_specific_funcs = {
         SupportedLanguages.CS: cs_name,
         SupportedLanguages.CPP: cpp_name,
         SupportedLanguages.TS: java_name,
+        SupportedLanguages.RS: java_name,
         SupportedLanguages.PY: java_name,
         SupportedLanguages.MD: lambda x: x,
     },
@@ -621,6 +634,7 @@ language_specific_funcs = {
         SupportedLanguages.CS: param_name,
         SupportedLanguages.CPP: cpp_param_name,
         SupportedLanguages.TS: param_name,
+        SupportedLanguages.RS: cpp_param_name,
         SupportedLanguages.PY: py_param_name,
         SupportedLanguages.MD: lambda x: x,
     },
@@ -629,6 +643,7 @@ language_specific_funcs = {
         SupportedLanguages.CS: cs_escape_keyword,
         SupportedLanguages.CPP: lambda x: x,
         SupportedLanguages.TS: ts_escape_keyword,
+        SupportedLanguages.RS: rs_escape_keyword,
         SupportedLanguages.PY: py_escape_keyword,
         SupportedLanguages.MD: lambda x: x,
     },
@@ -637,6 +652,7 @@ language_specific_funcs = {
         SupportedLanguages.CS: lambda x: x,
         SupportedLanguages.CPP: lambda x: x,
         SupportedLanguages.TS: ts_get_import_path_holders,
+        SupportedLanguages.RS: rs_get_import_path_holders,
         SupportedLanguages.PY: py_get_import_path_holders,
         SupportedLanguages.MD: lambda x: x,
     },
@@ -645,6 +661,7 @@ language_specific_funcs = {
         SupportedLanguages.CS: lambda x: x,
         SupportedLanguages.CPP: lambda x: x,
         SupportedLanguages.TS: lambda x: x,
+        SupportedLanguages.RS: lambda x: x,
         SupportedLanguages.PY: py_custom_type_name,
         SupportedLanguages.MD: lambda x: x,
     },
@@ -671,6 +688,7 @@ language_service_ignore_list = {
     SupportedLanguages.CPP: cpp_ignore_service_list,
     SupportedLanguages.CS: cs_ignore_service_list,
     SupportedLanguages.PY: py_ignore_service_list,
+    SupportedLanguages.RS: rs_ignore_service_list,
     SupportedLanguages.TS: ts_ignore_service_list,
     # SupportedLanguages.GO: set()
 }
@@ -705,6 +723,7 @@ def create_environment(lang, namespace):
     env.keep_trailing_newline = False
     env.filters["capital"] = capital
     env.globals["to_upper_snake_case"] = to_upper_snake_case
+    env.globals["to_lower_snake_case"] = to_lower_snake_case
     env.globals["fixed_params"] = fixed_params
     env.globals["var_size_params"] = var_size_params
     env.globals["new_params"] = new_params
