@@ -122,8 +122,8 @@ class PathHolders:
     SchemaCodec = ImportPathHolder('SchemaCodec', 'schema_codec', is_custom_codec=True)
     Schema = ImportPathHolder('Schema', 'serialization::schema', is_internal_file=True)
     UUID = ImportPathHolder('Uuid', 'uuid', is_internal_file=False, import_as_wildcard=False)
-    Data = ImportPathHolder('Data', 'serialization')
-    DataCodec = ImportPathHolder('DataCodec', 'codec_builtin', is_builtin_codec=True)
+    Data = ImportPathHolder('HeapData', 'serialization::heap_data')
+    DataCodec = ImportPathHolder('DataCodec', 'data_codec', is_builtin_codec=True)
     ByteArrayCodec = ImportPathHolder('ByteArrayCodec', 'byte_array_codec', is_builtin_codec=True)
     LongArrayCodec = ImportPathHolder('LongArrayCodec', 'long_array_codec', is_builtin_codec=True)
     Address = ImportPathHolder('Address', 'connection::address')
@@ -304,6 +304,7 @@ for root, dirnames, filenames in os.walk('./protocol-definitions'):
         # append to rs_ignore_service_list
         rs_ignore_service_list.append(filename[:-5])
 
+rs_ignore_service_list.remove("Map")
 rs_ignore_service_list.remove("Client")
 rs_ignore_service_list.remove("Schema")
 rs_ignore_service_list.remove("MemberVersion")
@@ -344,7 +345,7 @@ _rs_types = {
     "longArray": "Long[]",
     "byteArray": "Buffer",
     "String": "String",
-    "Data": "Data",
+    "Data": "HeapData",
     "Address": "Address",
     "FieldDescriptor": "FieldDescriptor",
     "ErrorHolder": "ErrorHolder",
