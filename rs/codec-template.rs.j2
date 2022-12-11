@@ -119,7 +119,7 @@ impl {{ service_name|capital }}{{ method.name|capital }}Codec {
     {% endfor %}
     {% for event in method.events %}
         {% for param in fixed_params(event.params) %}
-    const EVENT_{{ to_upper_snake_case(event.name)}}_{{to_upper_snake_case(param.name)}}_OFFSET: usize = {% if loop.first %}ClientMessage::PARTITION_ID_OFFSET as usize + BitsUtil::INT_SIZE_IN_BYTES{% else %}EVENT_{{ to_upper_snake_case(event.name)}}_{{ to_upper_snake_case(loop.previtem.name)}}_OFFSET as usize+ BitsUtil::{{loop.previtem.type.upper()}}_SIZE_IN_BYTES{% endif %} as usize;
+    const EVENT_{{ to_upper_snake_case(event.name)}}_{{to_upper_snake_case(param.name)}}_OFFSET: usize = {% if loop.first %}ClientMessage::PARTITION_ID_OFFSET as usize + BitsUtil::INT_SIZE_IN_BYTES{% else %}Self::EVENT_{{ to_upper_snake_case(event.name)}}_{{ to_upper_snake_case(loop.previtem.name)}}_OFFSET as usize+ BitsUtil::{{loop.previtem.type.upper()}}_SIZE_IN_BYTES{% endif %} as usize;
         {% endfor %}
     {% endfor %}
 

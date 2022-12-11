@@ -672,6 +672,7 @@ language_specific_funcs = {
         SupportedLanguages.TS: lambda x,y: y,
         SupportedLanguages.PY: lambda x,y: y,
         SupportedLanguages.MD: lambda x,y: y,
+        SupportedLanguages.RS: lambda x,y: y,
     },
     "init_env": {
         SupportedLanguages.JAVA: lambda x: x,
@@ -680,6 +681,7 @@ language_specific_funcs = {
         SupportedLanguages.TS: lambda x: x,
         SupportedLanguages.PY: lambda x: x,
         SupportedLanguages.MD: lambda x: x,
+        SupportedLanguages.RS: lambda x: x
     }
 }
 
